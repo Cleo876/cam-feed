@@ -14,7 +14,7 @@
         .no-controls::-webkit-media-controls { display: none !important; }
     </style>
 </head>
-<body class="bg-zinc-950 text-zinc-100 min-h-screen flex flex-col font-sans">
+<body class="bg-zinc-950 text-zinc-100 h-[100dvh] w-screen overflow-hidden flex flex-col font-sans">
 
     <!-- Custom Message Box to replace native alerts -->
     <div id="message-box" class="fixed inset-0 z-50 flex items-center justify-center hidden bg-black/80 backdrop-blur-sm">
@@ -54,20 +54,23 @@
     </div>
 
     <!-- Phone / Sender Interface -->
-    <div id="sender-screen" class="hidden flex-1 flex flex-col p-4 space-y-4">
-        <div id="sender-setup" class="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 flex flex-col space-y-4">
+    <div id="sender-screen" class="hidden flex-1 flex flex-col p-4 space-y-4 overflow-hidden">
+        <div id="sender-setup" class="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 flex flex-col space-y-4 shrink-0">
             <h2 class="text-lg font-semibold text-center">Connect to PC</h2>
-            <div id="qr-reader" class="overflow-hidden rounded-xl border border-zinc-800 bg-black min-h-[250px]"></div>
+            <div id="qr-reader" class="overflow-hidden rounded-xl border border-zinc-800 bg-black max-h-[40vh]"></div>
             <button id="start-scan-btn" onclick="startQRScanner()" class="w-full py-3 bg-zinc-800 hover:bg-zinc-750 font-medium rounded-xl border border-zinc-700 transition shadow-lg">Scan PC QR Code</button>
             <p id="sender-status" class="text-sm text-zinc-400 text-center">Ready to pair.</p>
         </div>
 
-        <div id="sender-controls" class="hidden flex-1 flex flex-col space-y-4">
-            <div class="relative flex-1 bg-black rounded-2xl overflow-hidden border border-zinc-800 min-h-[300px] shadow-lg">
+        <div id="sender-controls" class="hidden flex-1 flex flex-col space-y-4 min-h-0">
+            <div id="sender-video-container" class="relative flex-1 bg-black rounded-2xl overflow-hidden border border-zinc-800 shadow-lg min-h-0 group">
                 <video id="local-video" autoplay playsinline muted class="w-full h-full object-cover"></video>
                 <div id="camera-toast" class="absolute top-4 left-1/2 -translate-x-1/2 px-4 py-2 bg-zinc-900/90 backdrop-blur border border-zinc-700 text-xs font-semibold tracking-wide rounded-full opacity-0 transition-opacity duration-300 pointer-events-none"></div>
+                <div class="absolute bottom-4 right-4 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <button onclick="toggleSenderFullscreen()" class="px-4 py-2 bg-zinc-900/80 hover:bg-zinc-900 backdrop-blur text-sm rounded-lg border border-zinc-700 shadow-lg">Fullscreen</button>
+                </div>
             </div>
-            <div class="flex gap-3">
+            <div class="flex gap-3 shrink-0">
                 <button onclick="cycleCamera()" class="flex-1 py-3.5 bg-zinc-800 hover:bg-zinc-750 font-semibold rounded-xl border border-zinc-700 transition flex items-center justify-center gap-2 shadow-lg">
                     <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/></svg>
                     Switch
@@ -86,6 +89,13 @@
         let videoDevices = [];
         let qrScanner = null;
         const ICE_LIMIT = 6; // Limit candidates to speed up connection
+
+        // Pinch-to-zoom variables
+        let currentZoom = 1;
+        let minZoom = 1;
+        let maxZoom = 1;
+        let stepZoom = 0.1;
+        let initialPinchDistance = 0;
 
         const rtcConfig = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
 
@@ -198,6 +208,69 @@
             }
         }
 
+        function toggleSenderFullscreen() {
+            const container = document.getElementById('sender-video-container');
+            if (!document.fullscreenElement) {
+                container.requestFullscreen().catch(err => showMessage("Fullscreen failed: " + err.message));
+            } else {
+                document.exitFullscreen();
+            }
+        }
+
+        // --- Pinch-to-Zoom Logic ---
+        function getDistance(touches) {
+            const dx = touches[0].clientX - touches[1].clientX;
+            const dy = touches[0].clientY - touches[1].clientY;
+            return Math.sqrt(dx * dx + dy * dy);
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            const videoElem = document.getElementById('sender-video-container');
+            
+            // Capture initial pinch distance
+            videoElem.addEventListener('touchstart', (e) => {
+                if (e.touches.length === 2) {
+                    initialPinchDistance = getDistance(e.touches);
+                }
+            }, { passive: false });
+
+            // Calculate active pinch scale
+            videoElem.addEventListener('touchmove', (e) => {
+                if (e.touches.length === 2 && maxZoom > minZoom) {
+                    e.preventDefault(); // Prevent standard browser scroll/zoom
+                    const newDistance = getDistance(e.touches);
+                    const delta = newDistance - initialPinchDistance;
+                    
+                    const zoomChange = (delta / 100) * stepZoom; 
+                    let newZoom = currentZoom + zoomChange;
+                    newZoom = Math.max(minZoom, Math.min(newZoom, maxZoom));
+
+                    if (Math.abs(newZoom - currentZoom) > (stepZoom * 0.1)) {
+                        currentZoom = newZoom;
+                        initialPinchDistance = newDistance; 
+                        
+                        if (localStream) {
+                            const track = localStream.getVideoTracks()[0];
+                            track.applyConstraints({ advanced: [{ zoom: currentZoom }] }).catch(err => console.warn(err));
+                        }
+                    }
+                }
+            }, { passive: false });
+        });
+
+        function setupZoom(track) {
+            const caps = track.getCapabilities();
+            const settings = track.getSettings();
+            if (caps.zoom) {
+                minZoom = caps.zoom.min || 1;
+                maxZoom = caps.zoom.max || 10;
+                stepZoom = caps.zoom.step || 0.1;
+                currentZoom = settings.zoom || minZoom;
+            } else {
+                maxZoom = minZoom = 1;
+            }
+        }
+
         // --- Sender Logic (Phone) ---
         async function initSender() {
             showScreen('sender-screen');
@@ -249,10 +322,14 @@
 
             pc = new RTCPeerConnection(rtcConfig);
             
-            // Acquire primary camera track
+            // Acquire primary camera track, forcing highest fidelity constraints natively available
             try {
                 localStream = await navigator.mediaDevices.getUserMedia({
-                    video: { deviceId: videoDevices[currentCameraIndex]?.deviceId ? { exact: videoDevices[currentCameraIndex].deviceId } : undefined },
+                    video: { 
+                        deviceId: videoDevices[currentCameraIndex]?.deviceId ? { exact: videoDevices[currentCameraIndex].deviceId } : undefined,
+                        width: { ideal: 3840 }, 
+                        height: { ideal: 2160 } 
+                    },
                     audio: false
                 });
             } catch (e) {
@@ -260,6 +337,7 @@
                 return;
             }
             
+            setupZoom(localStream.getVideoTracks()[0]);
             document.getElementById('local-video').srcObject = localStream;
             localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
 
@@ -316,11 +394,17 @@
 
             try {
                 const newStream = await navigator.mediaDevices.getUserMedia({
-                    video: { deviceId: { exact: targetDevice.deviceId } },
+                    video: { 
+                        deviceId: { exact: targetDevice.deviceId },
+                        width: { ideal: 3840 }, 
+                        height: { ideal: 2160 } 
+                    },
                     audio: false
                 });
 
                 const newVideoTrack = newStream.getVideoTracks()[0];
+                setupZoom(newVideoTrack);
+
                 const videoSender = pc.getSenders().find(s => s.track && s.track.kind === 'video');
                 
                 if (videoSender) {
