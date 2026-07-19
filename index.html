@@ -427,7 +427,10 @@
                 async (decodedText) => {
                     sessionId = decodedText;
                     document.getElementById('sender-status').innerText = "Connecting to session...";
-                    qrScanner.stop();
+                    
+                    // CRITICAL FIX: Await the scanner shutdown to completely release the camera lock
+                    await qrScanner.stop();
+                    
                     document.getElementById('sender-setup').classList.add('hidden');
                     document.getElementById('sender-controls').classList.remove('hidden');
                     await connectToReceiver();
@@ -525,6 +528,15 @@
             toast.classList.replace('opacity-0', 'opacity-100');
             setTimeout(() => toast.classList.replace('opacity-100', 'opacity-0'), 2000);
 
+            // CRITICAL FIX: Stop the active track BEFORE requesting the new one. 
+            // Mobile browsers (iOS/Android) enforce a strict hardware lock. If we do not stop
+            // the current lens first, the browser throws an Overconstrained/NotReadable error.
+            let oldDeviceId = null;
+            if (localStream && localStream.getVideoTracks().length > 0) {
+                oldDeviceId = localStream.getVideoTracks()[0].getSettings().deviceId;
+                localStream.getVideoTracks().forEach(t => t.stop());
+            }
+
             try {
                 const newStream = await navigator.mediaDevices.getUserMedia({
                     video: { 
@@ -548,18 +560,33 @@
                     }
                 }
 
-                // Clean up the previous track locally
-                if (localStream) {
-                    localStream.getVideoTracks().forEach(t => t.stop());
-                }
                 localStream = newStream;
                 document.getElementById('local-video').srcObject = localStream;
             } catch (err) {
                 showMessage("Failed to switch camera: " + err.message);
-                // Try to revert dropdown to actual active device on fail
-                if (localStream && localStream.getVideoTracks().length > 0) {
-                     const currentId = localStream.getVideoTracks()[0].getSettings().deviceId;
-                     if(currentId) document.getElementById('camera-select').value = currentId;
+                
+                // Fallback: If hardware rejected the new lens, try to gracefully re-initialize the old one
+                if (oldDeviceId) {
+                    try {
+                        localStream = await navigator.mediaDevices.getUserMedia({
+                            video: { deviceId: { exact: oldDeviceId }, width: { ideal: 3840 }, height: { ideal: 2160 } },
+                            audio: false
+                        });
+                        document.getElementById('local-video').srcObject = localStream;
+                        const recoverTrack = localStream.getVideoTracks()[0];
+                        setupZoom(recoverTrack);
+                        
+                        if (pc) {
+                            const videoSender = pc.getSenders().find(s => s.track && s.track.kind === 'video');
+                            if (videoSender) {
+                                await videoSender.replaceTrack(recoverTrack);
+                                await applyHighQualityVideoParameters(pc);
+                            }
+                        }
+                        document.getElementById('camera-select').value = oldDeviceId;
+                    } catch(recoverErr) {
+                        console.error("Camera recovery failed", recoverErr);
+                    }
                 }
             }
         }
