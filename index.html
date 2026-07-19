@@ -12,6 +12,8 @@
     <style>
         /* Hidden UI style for clean OBS capture in fullscreen */
         .no-controls::-webkit-media-controls { display: none !important; }
+        :fullscreen .fullscreen-hide { display: none !important; }
+        :-webkit-full-screen .fullscreen-hide { display: none !important; }
     </style>
 </head>
 <body class="bg-zinc-950 text-zinc-100 h-[100dvh] w-screen overflow-hidden flex flex-col font-sans">
@@ -27,7 +29,7 @@
 
     <!-- Role Selection Screen -->
     <div id="role-screen" class="flex-1 flex flex-col items-center justify-center p-6 space-y-6">
-        <h1 class="text-3xl font-bold tracking-tight text-amber-500">WebRTC Camera Feeder</h1>
+        <h1 class="text-3xl font-bold tracking-tight text-amber-500 text-center">WebRTC Camera Feeder <span id="version-display" class="text-sm font-normal text-zinc-500 ml-2"></span></h1>
         <p class="text-zinc-400 text-center max-w-sm text-sm">Select the role for this device to establish the video stream proxy.</p>
         <div class="flex flex-col sm:flex-row gap-4 w-full max-w-sm">
             <button onclick="initReceiver()" class="flex-1 py-4 bg-zinc-800 hover:bg-zinc-750 rounded-xl font-semibold border border-zinc-700 transition shadow-lg">PC / Receiver</button>
@@ -47,10 +49,10 @@
 
         <div id="video-container" class="hidden relative bg-black aspect-video rounded-2xl overflow-hidden border border-zinc-800 shadow-2xl group">
             <video id="remote-video" autoplay playsinline class="w-full h-full object-cover no-controls"></video>
-            <div class="absolute top-4 right-4 opacity-0 group-hover:opacity-100 transition-opacity z-10">
+            <div class="absolute top-4 right-4 opacity-0 group-hover:opacity-100 transition-opacity z-10 fullscreen-hide">
                 <button onclick="disconnectSession()" class="px-4 py-2 bg-red-900/80 hover:bg-red-900 backdrop-blur text-sm rounded-lg border border-red-700 shadow-lg text-white">Disconnect</button>
             </div>
-            <div class="absolute bottom-4 right-4 opacity-0 group-hover:opacity-100 transition-opacity">
+            <div class="absolute bottom-4 right-4 opacity-0 group-hover:opacity-100 transition-opacity fullscreen-hide">
                 <button onclick="toggleFullscreen()" class="px-4 py-2 bg-zinc-900/80 hover:bg-zinc-900 backdrop-blur text-sm rounded-lg border border-zinc-700">Fullscreen</button>
             </div>
         </div>
@@ -69,7 +71,7 @@
             <div id="sender-video-container" class="relative flex-1 bg-black rounded-2xl overflow-hidden border border-zinc-800 shadow-lg min-h-0 group">
                 <video id="local-video" autoplay playsinline muted class="w-full h-full object-cover"></video>
                 <div id="camera-toast" class="absolute top-4 left-1/2 -translate-x-1/2 px-4 py-2 bg-zinc-900/90 backdrop-blur border border-zinc-700 text-xs font-semibold tracking-wide rounded-full opacity-0 transition-opacity duration-300 pointer-events-none"></div>
-                <div class="absolute bottom-4 right-4 opacity-0 group-hover:opacity-100 transition-opacity">
+                <div class="absolute bottom-4 right-4 opacity-0 group-hover:opacity-100 transition-opacity fullscreen-hide">
                     <button onclick="toggleSenderFullscreen()" class="px-4 py-2 bg-zinc-900/80 hover:bg-zinc-900 backdrop-blur text-sm rounded-lg border border-zinc-700 shadow-lg">Fullscreen</button>
                 </div>
             </div>
@@ -86,6 +88,7 @@
     </div>
 
     <script>
+        const TOOL_VERSION = "1.1.0";
         const BASE_URL = "https://twenty-json.lovable.app/p/";
         let sessionId = "";
         let pc = null;
@@ -105,6 +108,27 @@
         const rtcConfig = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
 
         // --- Core Helpers & UI ---
+        
+        async function applyHighQualityVideoParameters(pc) {
+            const videoSender = pc.getSenders().find(s => s.track && s.track.kind === 'video');
+            if (videoSender) {
+                const params = videoSender.getParameters();
+                if (!params.encodings) params.encodings = [{}];
+                else if (params.encodings.length === 0) params.encodings.push({});
+                
+                // Max out bitrate for high fidelity local network streaming (50 Mbps)
+                params.encodings[0].maxBitrate = 50000000;
+                // Instruct WebRTC engine to prioritize crispness over smooth frame drops
+                params.degradationPreference = 'maintain-resolution';
+                
+                try {
+                    await videoSender.setParameters(params);
+                } catch (e) {
+                    console.warn("Advanced video params not supported by browser", e);
+                }
+            }
+        }
+
         function showScreen(screenId) {
             document.getElementById('role-screen').classList.add('hidden');
             document.getElementById(screenId).classList.remove('hidden');
@@ -258,19 +282,40 @@
 
         function toggleFullscreen() {
             const video = document.getElementById('remote-video');
-            if (!document.fullscreenElement) {
-                video.requestFullscreen().catch(err => showMessage("Fullscreen failed: " + err.message));
+            if (!document.fullscreenElement && !document.webkitFullscreenElement) {
+                if (video.requestFullscreen) {
+                    video.requestFullscreen().catch(err => showMessage("Fullscreen failed: " + err.message));
+                } else if (video.webkitRequestFullscreen) {
+                    video.webkitRequestFullscreen();
+                } else if (video.webkitEnterFullscreen) {
+                    video.webkitEnterFullscreen(); // iOS fallback
+                }
             } else {
-                document.exitFullscreen();
+                if (document.exitFullscreen) {
+                    document.exitFullscreen();
+                } else if (document.webkitExitFullscreen) {
+                    document.webkitExitFullscreen();
+                }
             }
         }
 
         function toggleSenderFullscreen() {
             const container = document.getElementById('sender-video-container');
-            if (!document.fullscreenElement) {
-                container.requestFullscreen().catch(err => showMessage("Fullscreen failed: " + err.message));
+            const video = document.getElementById('local-video');
+            if (!document.fullscreenElement && !document.webkitFullscreenElement) {
+                if (container.requestFullscreen) {
+                    container.requestFullscreen().catch(err => showMessage("Fullscreen failed: " + err.message));
+                } else if (container.webkitRequestFullscreen) {
+                    container.webkitRequestFullscreen();
+                } else if (video.webkitEnterFullscreen) {
+                    video.webkitEnterFullscreen(); // iOS Safari constraint fallback
+                }
             } else {
-                document.exitFullscreen();
+                if (document.exitFullscreen) {
+                    document.exitFullscreen();
+                } else if (document.webkitExitFullscreen) {
+                    document.webkitExitFullscreen();
+                }
             }
         }
 
@@ -282,6 +327,7 @@
         }
 
         document.addEventListener('DOMContentLoaded', () => {
+            document.getElementById('version-display').innerText = `v${TOOL_VERSION}`;
             const videoElem = document.getElementById('sender-video-container');
             
             // Capture initial pinch distance
@@ -417,6 +463,9 @@
             document.getElementById('local-video').srcObject = localStream;
             localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
 
+            // Enforce max fidelity right after track is bound
+            await applyHighQualityVideoParameters(pc);
+
             let iceCount = 0;
             let answerSent = false;
 
@@ -481,6 +530,8 @@
                     if (videoSender) {
                         // Hot swap the live track directly inside the established PeerConnection
                         await videoSender.replaceTrack(newVideoTrack);
+                        // Re-enforce quality constraints on the new track
+                        await applyHighQualityVideoParameters(pc);
                     }
                 }
 
