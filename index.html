@@ -14,6 +14,9 @@
         .no-controls::-webkit-media-controls { display: none !important; }
         :fullscreen .fullscreen-hide { display: none !important; }
         :-webkit-full-screen .fullscreen-hide { display: none !important; }
+        .fullscreen-only { display: none !important; }
+        :fullscreen .fullscreen-only { display: block !important; }
+        :-webkit-full-screen .fullscreen-only { display: block !important; }
     </style>
 </head>
 <body class="bg-zinc-950 text-zinc-100 h-[100dvh] w-screen overflow-hidden flex flex-col font-sans">
@@ -73,6 +76,9 @@
                 <div id="camera-toast" class="absolute top-4 left-1/2 -translate-x-1/2 px-4 py-2 bg-zinc-900/90 backdrop-blur border border-zinc-700 text-xs font-semibold tracking-wide rounded-full opacity-0 transition-opacity duration-300 pointer-events-none"></div>
                 <div class="absolute bottom-4 right-4 opacity-0 group-hover:opacity-100 transition-opacity fullscreen-hide">
                     <button onclick="toggleSenderFullscreen()" class="px-4 py-2 bg-zinc-900/80 hover:bg-zinc-900 backdrop-blur text-sm rounded-lg border border-zinc-700 shadow-lg">Fullscreen</button>
+                </div>
+                <div class="absolute bottom-4 right-4 transition-opacity fullscreen-only">
+                    <button onclick="toggleSenderFullscreen()" class="px-4 py-2 bg-red-900/80 hover:bg-red-900 backdrop-blur text-sm rounded-lg border border-red-700 shadow-lg text-white">Exit Fullscreen</button>
                 </div>
             </div>
             <div class="flex gap-3 shrink-0">
@@ -281,14 +287,15 @@
         }
 
         function toggleFullscreen() {
+            const container = document.getElementById('video-container');
             const video = document.getElementById('remote-video');
             if (!document.fullscreenElement && !document.webkitFullscreenElement) {
-                if (video.requestFullscreen) {
-                    video.requestFullscreen().catch(err => showMessage("Fullscreen failed: " + err.message));
-                } else if (video.webkitRequestFullscreen) {
-                    video.webkitRequestFullscreen();
+                if (container.requestFullscreen) {
+                    container.requestFullscreen().catch(err => showMessage("Fullscreen failed: " + err.message));
+                } else if (container.webkitRequestFullscreen) {
+                    container.webkitRequestFullscreen();
                 } else if (video.webkitEnterFullscreen) {
-                    video.webkitEnterFullscreen(); // iOS fallback
+                    video.webkitEnterFullscreen(); // iOS fallback natively strictly requires the video node
                 }
             } else {
                 if (document.exitFullscreen) {
@@ -320,6 +327,9 @@
         }
 
         // --- Pinch-to-Zoom Logic ---
+        let lastZoomTime = 0;
+        const ZOOM_THROTTLE_MS = 60; // Throttles hardware requests to ~16 fps to prevent memory leaking
+
         function getDistance(touches) {
             const dx = touches[0].clientX - touches[1].clientX;
             const dy = touches[0].clientY - touches[1].clientY;
@@ -348,9 +358,12 @@
                     let newZoom = currentZoom + zoomChange;
                     newZoom = Math.max(minZoom, Math.min(newZoom, maxZoom));
 
-                    if (Math.abs(newZoom - currentZoom) > (stepZoom * 0.1)) {
+                    const now = Date.now();
+                    // Implement Throttle (time barrier + step barrier)
+                    if (Math.abs(newZoom - currentZoom) > (stepZoom * 0.5) && (now - lastZoomTime) > ZOOM_THROTTLE_MS) {
                         currentZoom = newZoom;
                         initialPinchDistance = newDistance; 
+                        lastZoomTime = now;
                         
                         if (localStream) {
                             const track = localStream.getVideoTracks()[0];
